@@ -1,0 +1,10 @@
+maintainer="Rudraksha Gupta <guptarud@gmail.com>"
+fork_reason="dummy"
+# the APKBUILD bumps pkgver after sourcing this; keep abuild's default builddir on the real one
+builddir="${builddir:-$srcdir/$pkgname-$pkgver}"
+source="$source
+	n3pp/0001-idle-monitor-do-not-give-up-when-the-name-owner-is-slow-to-answer.patch
+	"
+sha512sums="$sha512sums
+9c410b80b9a170f51213aac2e1a47c1f81b2c18950369316405981d1ea5ec1fc42666e57c6634cedc43f9f1c2a01cc538cabd4d0bb5afb2b6940e559d4ed26c9  0001-idle-monitor-do-not-give-up-when-the-name-owner-is-slow-to-answer.patch
+"

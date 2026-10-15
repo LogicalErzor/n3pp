@@ -1,0 +1,72 @@
+N3PP - Unofficial Nura 3rd-Party Ports
+
+
+# About
+
+This is an unofficial Nura 3rd party repository created by [LogicalErzor](https://nura.eco/team/#rudraksha-gupta-logicalerzor). Think of this as the AUR, but for Nura.
+
+This project is aimed as a catch all for device ports and packages that can't be upstreamed to Nura or elsewhere. Examples include:
+- AI usage for Nura's device ports
+- Proprietary software
+- Experimental software
+
+
+# How to Use
+
+1. You must have run `pmbootstrap init` and git cloned this repository before proceeding. Make sure pmbootstrap, pmaports, and n3pp are up to date and have no uncommitted changes. These are the aliases we will use, so feel free to replace these paths with your own:
+```sh
+PMAPORTS=~/nura/pmaports
+N3PP=~/nura/n3pp
+MERGED=~/nura/pmaports-merged
+```
+
+To use N3PP
+```sh
+mkdir -p "$N3PP/.overlay-work" "$MERGED"
+sudo mount -t overlay n3pp -o "lowerdir=$PMAPORTS,upperdir=$N3PP/overlay,workdir=$N3PP/.overlay-work" "$MERGED"
+pmbootstrap config aports "$MERGED"
+```
+
+To undo:
+```sh
+pmbootstrap config aports "$PMAPORTS"
+sudo umount -R "$MERGED"
+```
+
+You can then use any pmbootstrap commands you like. Be careful with git commands.
+
+
+# Users
+
+Please see Section 15 on the GPLv3 License:
+
+THERE IS NO WARRANTY FOR THE PROGRAM, TO THE EXTENT PERMITTED BY APPLICABLE LAW. EXCEPT WHEN OTHERWISE STATED IN WRITING THE COPYRIGHT HOLDERS AND/OR OTHER PARTIES PROVIDE THE PROGRAM “AS IS” WITHOUT WARRANTY OF ANY KIND, EITHER EXPRESSED OR IMPLIED, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE. THE ENTIRE RISK AS TO THE QUALITY AND PERFORMANCE OF THE PROGRAM IS WITH YOU. SHOULD THE PROGRAM PROVE DEFECTIVE, YOU ASSUME THE COST OF ALL NECESSARY SERVICING, REPAIR OR CORRECTION.
+
+
+# Project Constraints - For Developers
+
+These constraints will eventually be autonomously verified with GitHub Actions
+
+1. This project will currently only target edge (aka the main branch of Nura's pmaports/pmbootstrap). Forked packages will be rebased often. Any patches that conflict on a rebase will be given 2 weeks, or 2 pkgver bumps (whichever is shorter), to fix. Otherwise it will be dropped if no fix is supplied.
+2. If you decide to create/fork/patch, you need to demonstrate why it cannot be upstreamed.
+	a. For example: If AI was used for developing, a link to an AI policy will suffice.
+	b. Another example: If your package can be a Snap/Flatpak/AppImage, it will be rejected.
+3. If your package/patch is accepted into this repository, you will be responsible for its maintenance. Any and all inquires must be answered in a timely manner, otherwise it will be dropped.
+4. An exception to rule 2 is the Linux package for your device as it's slow in accepting patches. Therefore, you may have a custom Linux kernel for your device in this repository. However, the Linux package for your device MUST not be older than the last 2 stable releases.
+	a. For example: if the latest Linux kernel for your device is 42.69.420, the Linux kernel package for your device must be greater than or equal to 42.67
+5. Patches must aim to be standalone. If necessary, please modify an existing patch instead of patching a patch. Become a co-maintainer of dependent patches to be notified of any changes. If the patch you depend on is dropped and as a result your patch is dropped too, the onus is on you.
+6. Forked packages must stay identical to upstream. Put ALL changes in `<pkg>/n3pp/`. Only the upstream `APKBUILD` will be modified; in APKBUILD, append this this at the end in order: `. "$startdir"/n3pp/APKBUILD`, `pkgver=1$pkgver`, `pkgrel=1$pkgrel`
+	a. pmbootstrap quirks:
+		I. pmbootstrap reads `APKBUILD` as text and never runs `n3pp/APKBUILD`. That's why some information (eg. pkgver/pkgrel) must reside in upstream's APKBUILD
+		II. Device packages can also have deviceinfo modified as well, in addition to APKBUILD
+
+If there are any questions/comments/concerns, please create an issue here first. Do not bother Nura developers unless you are confident that the issue there.
+
+
+# The Goal
+
+[The Nura wiki](https://wiki.nura.eco) is a vast trove of useful information. This project aims to not deviate from upstream too much, so that the wiki should hold true. Please refer to it to see device specific information, porting tips, and other useful information when it comes to mainlining your device.
+
+The aim is to get your device to use Nura's device-generic-{arch} ports (eg. https://gitlab.postmarketos.org/postmarketOS/pmaports/-/tree/main/device/community/device-generic-ppc64le) and to upstream all packages. To do this, you will need to properly upstream all device specific bits (eg. {linux,device,firmware}-<vendor>-<codename>). Once your package looks exactly like Nura's device-generic-{arch} package, you can drop the package here and use Nura directly. :)
+
+There are murmurs to combine all the device-generic-{arch} ports into one, but that hasn't materialized yet.

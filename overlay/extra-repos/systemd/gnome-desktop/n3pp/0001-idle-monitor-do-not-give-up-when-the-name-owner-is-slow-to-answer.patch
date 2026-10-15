@@ -1,0 +1,303 @@
+From 620f65037660a642371d05c60b26ec6a64da6b68 Mon Sep 17 00:00:00 2001
+From: Rudraksha Gupta <guptarud@gmail.com>
+Date: Tue, 6 Oct 2026 23:30:00 +0000
+Subject: [PATCH] idle-monitor: Do not give up when the name owner is slow to
+ answer
+
+GnomeIdleMonitor talks to org.gnome.Mutter.IdleMonitor in two steps:
+when the name appears it creates an object manager client, which calls
+GetManagedObjects, and once it has the proxy it adds each watch with
+AddIdleWatch or AddUserActiveWatch. Both calls use the default D-Bus
+timeout of 25 seconds, and both treat a timeout as final:
+
+  Failed to acquire idle monitor object manager: Timeout was reached
+  Failed to acquire idle monitor proxy: Timeout was reached
+
+Nothing tries again. The name stays owned, so on_name_appeared() is not
+called a second time, and a watch that is never added never fires.
+
+This happens with a phosh session on a slow phone (msm8960, two cores,
+thermally limited to 384 MHz during login). For about a minute after
+login phosh's main loop can leave incoming calls unanswered for 30
+seconds. In five out of five automated logins gsd-power or
+gnome-session hit one of the two timeouts. When it is gsd-power, its
+user-active watch never fires after the screen is blanked, so the power
+key no longer turns the display back on. Restarting gsd-power once the
+session has settled makes it work.
+
+Handle the two steps differently, because only one of them has side
+effects:
+
+- GetManagedObjects only reads state, and the object manager client
+  does not allow changing its timeout. When it times out, retry
+  creating the object manager for as long as the name stays owned,
+  with a delay starting at 1 second and doubling up to 16 seconds.
+  Give each attempt its own cancellable, and cancel the attempt and any
+  pending retry when the name vanishes, when it appears with a new
+  owner and when the monitor is disposed. Drop a result for a previous
+  name owner, and never replace an object manager once acquired. Other
+  errors are reported as before.
+
+- AddIdleWatch and AddUserActiveWatch create a watch in the name owner.
+  A timed out call is still handled there, and the client would not
+  know the ID of the watch it created, so retrying would leave watches
+  that can neither fire nor be removed. Add watches without a timeout
+  instead. If the name owner goes away, the call still fails with an
+  error.
+
+A message is logged when the object manager is acquired after retrying.
+---
+ libgnome-desktop/gnome-idle-monitor.c | 163 +++++++++++++++++++++++---
+ 1 file changed, 148 insertions(+), 15 deletions(-)
+
+diff --git a/libgnome-desktop/gnome-idle-monitor.c b/libgnome-desktop/gnome-idle-monitor.c
+index 1cbad8e..f32c868 100644
+--- a/libgnome-desktop/gnome-idle-monitor.c
++++ b/libgnome-desktop/gnome-idle-monitor.c
+@@ -37,6 +37,11 @@ struct _GnomeIdleMonitorPrivate
+ 	GCancellable        *cancellable;
+ 	MetaDBusIdleMonitor *proxy;
+ 	MetaDBusObjectManagerClient *om;
++	GCancellable        *om_cancellable;
++	GSource             *om_retry_source;
++	guint                om_retry_count;
++	GDBusConnection     *connection;
++	char                *name_owner;
+ 	int                  name_watch_id;
+ 	GHashTable          *watches;
+ 	GHashTable          *watches_by_upstream_id;
+@@ -69,6 +74,10 @@ G_DEFINE_TYPE_WITH_CODE (GnomeIdleMonitor, gnome_idle_monitor, G_TYPE_OBJECT,
+ 
+ #define IDLE_MONITOR_PATH "/org/gnome/Mutter/IdleMonitor/Core"
+ 
++/* Longest delay, in seconds, between two attempts to create the object
++ * manager. The delay starts at 1 second and doubles after each failure. */
++#define OBJECT_MANAGER_MAX_RETRY_DELAY 16
++
+ static void
+ on_watch_fired (MetaDBusIdleMonitor *proxy,
+ 		guint                upstream_id,
+@@ -136,6 +145,23 @@ idle_monitor_watch_destroy (GnomeIdleMonitorWatch *watch)
+ 	idle_monitor_watch_unref (watch);
+ }
+ 
++static void
++cancel_object_manager (GnomeIdleMonitor *monitor)
++{
++	if (monitor->priv->om_cancellable) {
++		g_cancellable_cancel (monitor->priv->om_cancellable);
++		g_clear_object (&monitor->priv->om_cancellable);
++	}
++
++	if (monitor->priv->om_retry_source) {
++		g_source_destroy (monitor->priv->om_retry_source);
++		g_source_unref (monitor->priv->om_retry_source);
++		monitor->priv->om_retry_source = NULL;
++	}
++
++	monitor->priv->om_retry_count = 0;
++}
++
+ static void
+ gnome_idle_monitor_dispose (GObject *object)
+ {
+@@ -152,6 +178,9 @@ gnome_idle_monitor_dispose (GObject *object)
+ 		monitor->priv->name_watch_id = 0;
+ 	}
+ 
++	cancel_object_manager (monitor);
++	g_clear_object (&monitor->priv->connection);
++	g_clear_pointer (&monitor->priv->name_owner, g_free);
+ 	g_clear_object (&monitor->priv->proxy);
+ 	g_clear_object (&monitor->priv->om);
+ 	g_clear_pointer (&monitor->priv->watches, g_hash_table_destroy);
+@@ -224,6 +253,58 @@ get_proxy (GnomeIdleMonitor *monitor)
+ 				 G_CALLBACK (on_object_added), monitor, 0);
+ }
+ 
++static void on_object_manager_ready (GObject      *source,
++				     GAsyncResult *res,
++				     gpointer      user_data);
++
++static void
++acquire_object_manager (GnomeIdleMonitor *monitor)
++{
++	g_clear_object (&monitor->priv->om_cancellable);
++	monitor->priv->om_cancellable = g_cancellable_new ();
++
++	meta_dbus_object_manager_client_new (monitor->priv->connection,
++					     G_DBUS_OBJECT_MANAGER_CLIENT_FLAGS_NONE,
++					     monitor->priv->name_owner,
++					     "/org/gnome/Mutter/IdleMonitor",
++					     monitor->priv->om_cancellable,
++					     on_object_manager_ready,
++					     monitor);
++}
++
++static gboolean
++retry_acquire_object_manager (gpointer user_data)
++{
++	GnomeIdleMonitor *monitor = user_data;
++
++	g_clear_pointer (&monitor->priv->om_retry_source, g_source_unref);
++	acquire_object_manager (monitor);
++
++	return G_SOURCE_REMOVE;
++}
++
++static void
++schedule_object_manager_retry (GnomeIdleMonitor *monitor,
++			       const GError     *error)
++{
++	guint delay;
++
++	delay = MIN (1u << MIN (monitor->priv->om_retry_count, 31),
++		     OBJECT_MANAGER_MAX_RETRY_DELAY);
++	monitor->priv->om_retry_count++;
++
++	g_debug ("Failed to acquire idle monitor object manager, retry %u in %u s: %s",
++		 monitor->priv->om_retry_count, delay, error->message);
++
++	monitor->priv->om_retry_source = g_timeout_source_new_seconds (delay);
++	g_source_set_callback (monitor->priv->om_retry_source,
++			       retry_acquire_object_manager, monitor, NULL);
++	g_source_set_name (monitor->priv->om_retry_source,
++			   "[gnome-desktop] retry_acquire_object_manager");
++	g_source_attach (monitor->priv->om_retry_source,
++			 g_main_context_get_thread_default ());
++}
++
+ static void
+ on_object_manager_ready (GObject	*source,
+ 			 GAsyncResult	*res,
+@@ -232,15 +313,51 @@ on_object_manager_ready (GObject	*source,
+ 	GnomeIdleMonitor *monitor = user_data;
+ 	GDBusObjectManager *om;
+ 	GError *error = NULL;
++	const char *name;
+ 
+ 	om = meta_dbus_object_manager_client_new_finish (res, &error);
++
++	/* The monitor may already be disposed when the attempt was cancelled */
++	if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
++		g_error_free (error);
++		return;
++	}
++
++	/* Drop the result of an attempt made for a previous name owner */
++	name = g_dbus_object_manager_client_get_name (G_DBUS_OBJECT_MANAGER_CLIENT (source));
++	if (g_strcmp0 (name, monitor->priv->name_owner) != 0) {
++		g_clear_error (&error);
++		g_clear_object (&om);
++		return;
++	}
++
++	g_clear_object (&monitor->priv->om_cancellable);
++
+ 	if (!om) {
+-		if (!g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++		/* The name owner may be too busy to answer GetManagedObjects
++		 * within the default timeout, which cannot be changed for the
++		 * object manager client. The call has no side effects, so
++		 * retry it for as long as the name stays owned, otherwise no
++		 * watch would ever be added for the lifetime of the monitor. */
++		if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_TIMED_OUT) &&
++		    !g_dbus_connection_is_closed (monitor->priv->connection))
++			schedule_object_manager_retry (monitor, error);
++		else
+ 			g_warning ("Failed to acquire idle monitor object manager: %s", error->message);
+ 		g_error_free (error);
+ 		return;
+ 	}
+ 
++	if (monitor->priv->om) {
++		g_object_unref (om);
++		return;
++	}
++
++	if (monitor->priv->om_retry_count > 0)
++		g_message ("Acquired idle monitor object manager after %u retries",
++			   monitor->priv->om_retry_count);
++	monitor->priv->om_retry_count = 0;
++
+ 	monitor->priv->om = META_DBUS_OBJECT_MANAGER_CLIENT (om);
+ 	get_proxy (monitor);
+ }
+@@ -253,13 +370,13 @@ on_name_appeared (GDBusConnection *connection,
+ {
+ 	GnomeIdleMonitor *monitor = user_data;
+ 
+-	meta_dbus_object_manager_client_new (connection,
+-					     G_DBUS_OBJECT_MANAGER_CLIENT_FLAGS_NONE,
+-					     name_owner,
+-					     "/org/gnome/Mutter/IdleMonitor",
+-					     monitor->priv->cancellable,
+-					     on_object_manager_ready,
+-					     monitor);
++	cancel_object_manager (monitor);
++
++	g_set_object (&monitor->priv->connection, connection);
++	g_free (monitor->priv->name_owner);
++	monitor->priv->name_owner = g_strdup (name_owner);
++
++	acquire_object_manager (monitor);
+ }
+ 
+ static void
+@@ -281,6 +398,10 @@ on_name_vanished (GDBusConnection *connection,
+ {
+ 	GnomeIdleMonitor *monitor = user_data;
+ 
++	cancel_object_manager (monitor);
++	g_clear_object (&monitor->priv->connection);
++	g_clear_pointer (&monitor->priv->name_owner, g_free);
++
+ 	g_hash_table_foreach (monitor->priv->watches, clear_watch, monitor);
+ 	g_clear_object (&monitor->priv->proxy);
+ 	g_clear_object (&monitor->priv->om);
+@@ -413,23 +534,35 @@ on_watch_added (GObject      *object,
+ 	idle_monitor_watch_unref (watch);
+ }
+ 
++/* Watches are added without a timeout. The name owner handles the call
++ * even if the reply comes after a timeout, and the client would then not
++ * know the ID of the watch it created, so a timed out watch could neither
++ * fire nor be removed. If the name owner goes away instead, the call
++ * fails with an error. */
+ static void
+ add_idle_watch (GnomeIdleMonitor      *monitor,
+ 		GnomeIdleMonitorWatch *watch)
+ {
+-	meta_dbus_idle_monitor_call_add_idle_watch (monitor->priv->proxy,
+-						    watch->timeout_msec,
+-						    monitor->priv->cancellable,
+-						    on_watch_added, idle_monitor_watch_ref (watch));
++	g_dbus_proxy_call (G_DBUS_PROXY (monitor->priv->proxy),
++			   "AddIdleWatch",
++			   g_variant_new ("(t)", watch->timeout_msec),
++			   G_DBUS_CALL_FLAGS_NONE,
++			   G_MAXINT,
++			   monitor->priv->cancellable,
++			   on_watch_added, idle_monitor_watch_ref (watch));
+ }
+ 
+ static void
+ add_active_watch (GnomeIdleMonitor      *monitor,
+ 		  GnomeIdleMonitorWatch *watch)
+ {
+-	meta_dbus_idle_monitor_call_add_user_active_watch (monitor->priv->proxy,
+-							   monitor->priv->cancellable,
+-							   on_watch_added, idle_monitor_watch_ref (watch));
++	g_dbus_proxy_call (G_DBUS_PROXY (monitor->priv->proxy),
++			   "AddUserActiveWatch",
++			   NULL,
++			   G_DBUS_CALL_FLAGS_NONE,
++			   G_MAXINT,
++			   monitor->priv->cancellable,
++			   on_watch_added, idle_monitor_watch_ref (watch));
+ }
+ 
+ /**
+-- 
+2.39.5
+

@@ -1,0 +1,10 @@
+maintainer="Rudraksha Gupta <guptarud@gmail.com>"
+fork_reason="dummy"
+# the APKBUILD bumps pkgver after sourcing this; keep abuild's default builddir on the real one
+builddir="${builddir:-$srcdir/$pkgname-$pkgver}"
+source="$source
+	n3pp/0001-qualcomm-msm8960-add-samsung-galaxy-express.patch
+	"
+sha512sums="$sha512sums
+d6f3c0b276ca61a76c37bf9cbcfbd6f4e77ab2f685155e7e2e5b48fd07d6f8f3cd63bf954d69f7ed2f6b6fcfa237f09053f81e207851f4310c13cec181659b10  0001-qualcomm-msm8960-add-samsung-galaxy-express.patch
+"

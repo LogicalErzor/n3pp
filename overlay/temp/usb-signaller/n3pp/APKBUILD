@@ -1,0 +1,4 @@
+maintainer="Rudraksha Gupta <guptarud@gmail.com>"
+fork_reason="dummy"
+# the APKBUILD bumps pkgver after sourcing this; keep abuild's default builddir on the real one
+builddir="${builddir:-$srcdir/$pkgname-$pkgver}"

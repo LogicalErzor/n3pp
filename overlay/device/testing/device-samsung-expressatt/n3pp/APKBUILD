@@ -1,0 +1,8 @@
+maintainer="Rudraksha Gupta <guptarud@gmail.com>"
+fork_reason="dummy"
+# the APKBUILD bumps pkgver after sourcing this; keep abuild's default builddir on the real one
+builddir="${builddir:-$srcdir/$pkgname-$pkgver}"
+source="${source/kernel-cmdline.conf/}"
+sha512sums="
+94848da4277588b51abac66467a9b4208d01408aebd9ca39da17cce5cce7a5f36ddb436a9f7e33df8c33f206c0037581a43a4832ace16fff3396f5a20c7139f1  deviceinfo
+"

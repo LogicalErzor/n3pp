@@ -1,0 +1,248 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Rudraksha Gupta <guptarud@gmail.com>
+Date: Sat, 03 Oct 2026 07:04:05 -0400
+Subject: [PATCH 2/2] udev-manager: Find the graphical logind session
+
+The login1 session proxy used for SetBrightness() (backlight and torch)
+uses /org/freedesktop/login1/session/auto. logind resolves "auto" from
+the calling process. When phosh runs as a systemd user service
+(gnome-session's systemd integration, mobi.phosh.Shell.service in
+user@UID.service/session.slice) that process belongs to no session,
+or, with current systemd, to the seatless "manager" class session of
+the user's service manager. logind then refuses brightness changes:
+
+  Setting backlight on DSI-1 failed:
+  GDBus.Error:org.freedesktop.login1.NotYourDevice: Your session has
+  no seat, refusing.
+
+Look up the session via phosh_find_systemd_session() instead and fall
+back to "auto" only when that finds nothing.
+
+phosh_find_systemd_session() has a similar problem: outside a session
+scope it uses sd_uid_get_display() which can be a non graphical session
+(e.g. a ssh login that came before the graphical one), so the screen
+saver manager would listen to Lock/Unlock and set the LockedHint on the
+wrong session. Make it only accept a local graphical session with a
+seat (type wayland/x11/mir, class user*/greeter/lock-screen, not
+closing) in this order: the process' own session, $XDG_SESSION_ID,
+logind's display session, any of the user's sessions preferring active
+ones. If none qualifies keep the previous behaviour.
+---
+ src/udev-manager.c |  42 ++++++++++++++++-
+ src/util.c         | 109 +++++++++++++++++++++++++++++++++++++++++----
+ 2 files changed, 141 insertions(+), 10 deletions(-)
+
+diff --git a/src/udev-manager.c b/src/udev-manager.c
+index e678b10f..bf19c9ce 100644
+--- a/src/udev-manager.c
++++ b/src/udev-manager.c
+@@ -14,9 +14,11 @@
+ #include "monitor/monitor.h"
+ #include "shell-priv.h"
+ #include "udev-manager.h"
++#include "util.h"
+ 
+ #define BUS_NAME "org.freedesktop.login1"
+-#define OBJECT_PATH "/org/freedesktop/login1/session/auto"
++#define SESSION_OBJECT_PATH_PREFIX "/org/freedesktop/login1/session/"
++#define SESSION_OBJECT_PATH_AUTO SESSION_OBJECT_PATH_PREFIX "auto"
+ 
+ #define BACKLIGHT_SUBSYSTEM "backlight"
+ #define LEDS_SUBSYSTEM "leds"
+@@ -96,6 +98,29 @@ phosh_backlight_sysfs_udev_get_raw (GList      *devices,
+ }
+ 
+ 
++/* Encode a session id like sd_bus_path_encode() so it can be used as
++ * object path component as done by logind */
++static char *
++get_session_object_path (const char *session_id)
++{
++  GString *path = g_string_new (SESSION_OBJECT_PATH_PREFIX);
++
++  if (!session_id[0]) {
++    g_string_append_c (path, '_');
++    return g_string_free (path, FALSE);
++  }
++
++  for (const char *c = session_id; *c; c++) {
++    if (g_ascii_isalpha (*c) || (c != session_id && g_ascii_isdigit (*c)))
++      g_string_append_c (path, *c);
++    else
++      g_string_append_printf (path, "_%02x", (guchar) *c);
++  }
++
++  return g_string_free (path, FALSE);
++}
++
++
+ static void
+ on_uevent (PhoshUdevManager *self, const char *action, GUdevDevice *device)
+ {
+@@ -140,6 +165,8 @@ phosh_udev_manager_init (PhoshUdevManager *self)
+ {
+   const char * const subsystems[] = { BACKLIGHT_SUBSYSTEM, LEDS_SUBSYSTEM, NULL };
+   g_autoptr (GError) err = NULL;
++  g_autofree char *session_id = NULL;
++  g_autofree char *object_path = NULL;
+ 
+   self->udev_client = g_udev_client_new (subsystems);
+   g_signal_connect_object (self->udev_client,
+@@ -148,12 +175,23 @@ phosh_udev_manager_init (PhoshUdevManager *self)
+                            self,
+                            G_CONNECT_SWAPPED);
+ 
++  /* logind's "auto" session is the session of the calling process. When
++   * phosh runs as systemd user service that is either no session or the
++   * seatless session of the user's service manager and logind refuses
++   * SetBrightness() with NotYourDevice so look up the graphical session. */
++  if (phosh_find_systemd_session (&session_id))
++    object_path = get_session_object_path (session_id);
++  else
++    object_path = g_strdup (SESSION_OBJECT_PATH_AUTO);
++
++  g_debug ("Using login1 session %s (%s)", session_id ?: "auto", object_path);
++
+   /* This happens before any UI is up so a sync call is o.k. */
+   self->session_proxy =
+     phosh_dbus_login_session_proxy_new_for_bus_sync (G_BUS_TYPE_SYSTEM,
+                                                      G_DBUS_PROXY_FLAGS_DO_NOT_AUTO_START,
+                                                      BUS_NAME,
+-                                                     OBJECT_PATH,
++                                                     object_path,
+                                                      NULL,
+                                                      &err);
+   if (!self->session_proxy)
+diff --git a/src/util.c b/src/util.c
+index bb10b080..8d049669 100644
+--- a/src/util.c
++++ b/src/util.c
+@@ -171,24 +171,117 @@ phosh_strip_suffix_from_app_id (const char *app_id)
+ }
+ 
+ 
++static gboolean
++is_graphical_session (const char *session_id)
++{
++  g_autofree char *seat = NULL;
++  g_autofree char *type = NULL;
++  g_autofree char *class = NULL;
++  g_autofree char *state = NULL;
++
++  if (!session_id)
++    return FALSE;
++
++  /* Brightness and power key handling need a seat */
++  if (sd_session_get_seat (session_id, &seat) < 0 || !seat || !seat[0])
++    return FALSE;
++
++  if (sd_session_is_remote (session_id) > 0)
++    return FALSE;
++
++  if (sd_session_get_type (session_id, &type) < 0)
++    return FALSE;
++  if (g_strcmp0 (type, "wayland") != 0 && g_strcmp0 (type, "x11") != 0 &&
++      g_strcmp0 (type, "mir") != 0)
++    return FALSE;
++
++  /* user, user-early, user-incomplete, ..., greeter, lock-screen but not e.g.
++   * the seatless manager session of the user's systemd instance */
++  if (sd_session_get_class (session_id, &class) < 0)
++    return FALSE;
++  if (!g_str_has_prefix (class, "user") && g_strcmp0 (class, "greeter") != 0 &&
++      g_strcmp0 (class, "lock-screen") != 0)
++    return FALSE;
++
++  if (sd_session_get_state (session_id, &state) >= 0 && g_strcmp0 (state, "closing") == 0)
++    return FALSE;
++
++  return TRUE;
++}
++
++/**
++ * phosh_find_systemd_session:
++ * @session_id: (out): The session id
++ *
++ * Find the logind session phosh is displaying on. When phosh runs
++ * inside a session scope that is the session phosh's process belongs
++ * to. When it runs as a systemd user service (e.g. via gnome-session's
++ * systemd integration) its process belongs to no session (or to the
++ * seatless session of the user's service manager) so look for the
++ * user's local graphical session instead.
++ *
++ * Returns: %TRUE if a session was found
++ */
+ gboolean
+ phosh_find_systemd_session (char **session_id)
+ {
+-  g_autofree char *session = NULL;
++  g_autofree char *pid_session = NULL;
++  g_autofree char *display = NULL;
++  g_auto (GStrv) sessions = NULL;
++  const char *env_session;
++  const char *found = NULL;
+   int r;
+ 
+   g_return_val_if_fail (session_id != NULL && *session_id == NULL, FALSE);
+ 
+-  r = sd_pid_get_session (getpid(), &session);
+-  if (r == 0) {
+-    *session_id = g_steal_pointer (&session);
++  r = sd_pid_get_session (getpid (), &pid_session);
++  if (r == 0 && is_graphical_session (pid_session)) {
++    *session_id = g_steal_pointer (&pid_session);
++    return TRUE;
++  }
++
++  env_session = g_getenv ("XDG_SESSION_ID");
++  if (is_graphical_session (env_session)) {
++    *session_id = g_strdup (env_session);
++    return TRUE;
++  }
++
++  /* Let logind make a pick */
++  r = sd_uid_get_display (getuid (), &display);
++  if (r == 0 && is_graphical_session (display)) {
++    *session_id = g_steal_pointer (&display);
++    return TRUE;
++  }
++
++  /* logind's pick might be a non graphical session (e.g. a ssh login
++   * that came first), so look at all of the user's sessions, preferring
++   * active ones */
++  r = sd_uid_get_sessions (getuid (), 0, &sessions);
++  for (int i = 0; r > 0 && sessions[i]; i++) {
++    if (!is_graphical_session (sessions[i]))
++      continue;
++
++    if (sd_session_is_active (sessions[i]) > 0) {
++      found = sessions[i];
++      break;
++    }
++
++    if (!found)
++      found = sessions[i];
++  }
++  if (found) {
++    *session_id = g_strdup (found);
++    return TRUE;
++  }
++
++  /* No graphical session, use what we have */
++  if (pid_session) {
++    *session_id = g_steal_pointer (&pid_session);
+     return TRUE;
+   }
+ 
+-  /* Not in a system session, so let logind make a pick */
+-  r = sd_uid_get_display(getuid(), &session);
+-  if (r == 0) {
+-    *session_id = g_steal_pointer (&session);
++  if (display) {
++    *session_id = g_steal_pointer (&display);
+     return TRUE;
+   }
+ 
+-- 
+2.47.0
+

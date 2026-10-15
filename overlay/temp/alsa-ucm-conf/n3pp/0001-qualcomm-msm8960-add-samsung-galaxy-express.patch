@@ -1,0 +1,392 @@
+From edfa98966edf75aa3582f4d764a285476679f96d Mon Sep 17 00:00:00 2001
+From: Rudraksha Gupta <guptarud@gmail.com>
+Date: Wed, 7 Oct 2026 11:10:00 +0000
+Subject: [PATCH] Qualcomm: msm8960: Add Samsung Galaxy Express (SGH-I437)
+
+Add a HiFi profile for the samsung-expressatt sound card (driver
+sm-expressatt), an MSM8960 with a WCD9310 codec behind the Q6 ADSP:
+loudspeaker, earpiece and headphones for playback, the main and
+headset microphones for capture, with headphone jack detection.
+
+Tested on the device: each output plays and the microphone records.
+---
+ .../msm8960/samsung-expressatt/HiFi.conf      | 335 ++++++++++++++++++
+ .../samsung-expressatt.conf                   |  14 +
+ .../sm-expressatt/samsung-expressatt.conf     |   1 +
+ 3 files changed, 350 insertions(+)
+ create mode 100644 ucm2/Qualcomm/msm8960/samsung-expressatt/HiFi.conf
+ create mode 100644 ucm2/Qualcomm/msm8960/samsung-expressatt/samsung-expressatt.conf
+ create mode 120000 ucm2/conf.d/sm-expressatt/samsung-expressatt.conf
+
+diff --git a/ucm2/Qualcomm/msm8960/samsung-expressatt/HiFi.conf b/ucm2/Qualcomm/msm8960/samsung-expressatt/HiFi.conf
+new file mode 100644
+index 0000000..12af278
+--- /dev/null
++++ b/ucm2/Qualcomm/msm8960/samsung-expressatt/HiFi.conf
+@@ -0,0 +1,335 @@
++# Use case configuration for the Samsung Galaxy Express SGH-I437.
++#
++# Ground truth for the codec settings is the stock audio use case file of this
++# phone, audio/snd_soc_msm_2x in LineageOS android_device_samsung_expressatt
++# (identical on cm-11.0 and cm-12.0), as applied by the downstream
++# libalsa-intf. That file gives volumes in percent, which libalsa-intf turns
++# into a control index with percent_to_index() = pct * (max - min) / 100 +
++# min + 0.5 (legacy/libalsa-intf/alsa_mixer.c:56-57), where min is the TLV
++# minimum. Every tabla volume TLV has a 0 dB minimum (downstream
++# sound/soc/codecs/wcd9310.c:133-135), so the index is pct * max / 100
++# rounded. The mainline controls use the same registers, shifts, ranges and
++# inversion as the downstream ones, so those indices are used unchanged.
++#
++# The RX and TX "Digital Volume" controls are signed registers shown by ALSA
++# as 0..124 with index = dB + 84. Index 84 is 0 dB and index 0 is -84 dB.
++#
++# Frontend PCMs, in DT dai-link order: device 0 is MultiMedia1 (playback),
++# device 1 is MultiMedia2 (capture).
++
++SectionVerb {
++	Value {
++		TQ "HiFi"
++	}
++
++	EnableSequence [
++		# Q6 routing matrix: MultiMedia1 into PRIMARY_I2S_RX and
++		# PRIMARY_I2S_TX into MultiMedia2. Downstream routes the same port,
++		# under the names PRI_RX and PRI_TX (snd_soc_msm_2x:5-20, :1157-1172).
++		cset "name='PRI_I2S_RX Audio Mixer MultiMedia1' 1"
++		cset "name='MultiMedia2 Mixer PRI_I2S_TX' 1"
++
++		# Start from the tabla reset state, with every interpolator input
++		# and both capture slots at ZERO, and let each device connect only
++		# its own path. RX3 and RX7 drive LINEOUT1 and LINEOUT5, which no
++		# downstream device uses; their amp enable PMIC_GPIO_VPS_EN is not
++		# connected on this phone (express-gpio.h:126).
++		cset "name='RX1 MIX1 INP1' ZERO"
++		cset "name='RX2 MIX1 INP1' ZERO"
++		cset "name='RX3 MIX1 INP1' ZERO"
++		cset "name='RX4 MIX1 INP1' ZERO"
++		cset "name='RX5 MIX1 INP1' ZERO"
++		cset "name='RX7 MIX1 INP1' ZERO"
++		cset "name='I2S TX7 MUX' ZERO"
++		cset "name='I2S TX8 MUX' ZERO"
++	]
++
++	DisableSequence [
++		cset "name='PRI_I2S_RX Audio Mixer MultiMedia1' 0"
++		cset "name='MultiMedia2 Mixer PRI_I2S_TX' 0"
++	]
++
++	# Downstream gates the earpiece and headphone amps per device with
++	# 'DAC1 Switch' and 'HPHL DAC Switch'. Those are DAPM switches on
++	# register bits that reset to 0 (downstream wcd9310.c:1847-1852), so
++	# both amps stay off until a device turns its own on
++	# (snd_soc_msm_2x:3022-3044, :3275-3305). The machine
++	# driver's 'Earpiece Switch' and 'Headphone Switch' pin switches do the
++	# same job here, but the driver enables both pins at probe, so start
++	# with both off. The loudspeaker pin is left to the machine driver,
++	# which mutes it while a jack is inserted; downstream's UCM does not
++	# touch its 'Speaker Function' either. The pin switches are only used
++	# where the kernel provides them.
++	If.earpiece_pin {
++		Condition {
++			Type ControlExists
++			Control "name='Earpiece Switch'"
++		}
++		True.EnableSequence [
++			cset "name='Earpiece Switch' off"
++		]
++	}
++	If.headphone_pin {
++		Condition {
++			Type ControlExists
++			Control "name='Headphone Switch'"
++		}
++		True.EnableSequence [
++			cset "name='Headphone Switch' off"
++		]
++	}
++}
++
++# Loudspeaker, at the bottom of the handset. Its amp is enabled by PM8921
++# GPIO 18 (PMIC_GPIO_SPK_EN) and fed differentially from LINEOUT2, which
++# carries RX5, and LINEOUT4, which carries RX6 in DSM_INV mode, the inverse of
++# RX5 (Tabla 2.x interpolator map). Downstream Speaker, snd_soc_msm_2x:3165-3190.
++#
++# Downstream also sets 'RX5 MIX1 INP2' RX2 so that RX5 plays L+R. The mainline
++# codec driver has no RXn MIX1 INP2 control, so this device plays the left
++# channel only.
++SectionDevice."Speaker" {
++	Comment "Speaker"
++
++	ConflictingDevice [
++		"Headphones"
++		"Earpiece"
++	]
++
++	EnableSequence [
++		cset "name='RX5 MIX1 INP1' RX1"
++		cset "name='RX6 DSM MUX' DSM_INV"
++		# downstream LINEOUT2 and LINEOUT4 Volume 100%
++		cset "name='LineOut2 Volume' 12"
++		cset "name='LineOut4 Volume' 12"
++		# downstream 70%, +3 dB
++		cset "name='RX5 Digital Volume' 87"
++	]
++
++	DisableSequence [
++		cset "name='RX5 MIX1 INP1' ZERO"
++		cset "name='LineOut2 Volume' 0"
++		cset "name='LineOut4 Volume' 0"
++		cset "name='RX5 Digital Volume' 0"
++	]
++
++	Value {
++		PlaybackPriority 200
++		PlaybackPCM "hw:${CardId},0"
++	}
++}
++
++# Headphones on the 3.5 mm jack: RX1 into HPHL, RX2 into HPHR. Downstream
++# Headphones, snd_soc_msm_2x:3275-3305.
++#
++# RX1 also feeds the earpiece amp (DAC1). Downstream keeps the earpiece quiet
++# with its 'DAC1 Switch', which the mainline codec driver does not have. With
++# the machine driver's 'Earpiece Switch' the verb keeps the earpiece off
++# instead; on a kernel without that control the earpiece plays the left
++# channel along with the headphones.
++SectionDevice."Headphones" {
++	Comment "Headphones"
++
++	ConflictingDevice [
++		"Speaker"
++		"Earpiece"
++	]
++
++	EnableSequence [
++		cset "name='RX1 MIX1 INP1' RX1"
++		cset "name='RX2 MIX1 INP1' RX2"
++		# downstream HPHL and HPHR Volume 100%
++		cset "name='Headphone Left Volume' 12"
++		cset "name='Headphone Right Volume' 12"
++		# downstream 67.7%, 0 dB
++		cset "name='RX1 Digital Volume' 84"
++		cset "name='RX2 Digital Volume' 84"
++	]
++
++	DisableSequence [
++		cset "name='RX1 MIX1 INP1' ZERO"
++		cset "name='RX2 MIX1 INP1' ZERO"
++		cset "name='Headphone Left Volume' 0"
++		cset "name='Headphone Right Volume' 0"
++		cset "name='RX1 Digital Volume' 0"
++		cset "name='RX2 Digital Volume' 0"
++	]
++
++	Value {
++		PlaybackPCM "hw:${CardId},0"
++	}
++
++	# downstream 'HPHL DAC Switch' 1. The use case file also sets an
++	# 'HPHR DAC Switch', which the downstream codec driver does not have.
++	If.pin {
++		Condition {
++			Type ControlExists
++			Control "name='Headphone Switch'"
++		}
++		True {
++			EnableSequence [
++				cset "name='Headphone Switch' on"
++			]
++			DisableSequence [
++				cset "name='Headphone Switch' off"
++			]
++		}
++	}
++
++	# The machine driver creates "Headphone Jack" (plugged for 3- and
++	# 4-pole plugs) and "Headset Mic Jack" (4-pole only) card controls.
++	# Bind to the first and rank Headphones first, as usual; the driver
++	# also mutes the loudspeaker pin while a plug is in, hence JackHWMute.
++	# Kernels without the controls cannot report a plug, so a sound server
++	# picks the device with the highest priority: rank Headphones below
++	# Speaker there.
++	If.jack {
++		Condition {
++			Type ControlExists
++			Control "iface=CARD,name='Headphone Jack'"
++		}
++		True.Value {
++			PlaybackPriority 300
++			JackControl "Headphone Jack"
++			JackHWMute "Speaker"
++		}
++		False.Value.PlaybackPriority 150
++	}
++}
++
++# Earpiece, mono from RX1 through DAC1 and the EAR PA. Downstream Earpiece,
++# snd_soc_msm_2x:3022-3044.
++SectionDevice."Earpiece" {
++	Comment "Earpiece"
++
++	ConflictingDevice [
++		"Speaker"
++		"Headphones"
++	]
++
++	EnableSequence [
++		cset "name='RX1 MIX1 INP1' RX1"
++		# downstream 'EAR PA Gain' POS_6_DB, which writes 0 to
++		# RX_EAR_GAIN[7:5] (downstream wcd9310.c:609-631), the field behind
++		# this control
++		cset "name='Earpiece Volume' 0"
++		# downstream 74%, +8 dB
++		cset "name='RX1 Digital Volume' 92"
++	]
++
++	DisableSequence [
++		cset "name='RX1 MIX1 INP1' ZERO"
++		cset "name='RX1 Digital Volume' 0"
++	]
++
++	Value {
++		PlaybackPriority 100
++		PlaybackPCM "hw:${CardId},0"
++	}
++
++	# downstream 'DAC1 Switch' 1
++	If.pin {
++		Condition {
++			Type ControlExists
++			Control "name='Earpiece Switch'"
++		}
++		True {
++			EnableSequence [
++				cset "name='Earpiece Switch' on"
++			]
++			DisableSequence [
++				cset "name='Earpiece Switch' off"
++			]
++		}
++	}
++}
++
++# Main microphone: AMIC3 into ADC3 and DEC4, biased by MIC BIAS1
++# (downstream sound/soc/msm/msm8960-d2.c:445-446). Downstream Handset,
++# snd_soc_msm_2x:3622-3646, sends DEC4 to its one capture slot; both I2S
++# slots carry it here so that stereo and mono capture get the same signal.
++#
++# Gain differs from downstream on purpose. Downstream runs DEC4 at 0 dB
++# (67.7%) with ADC3 Volume 3 and MICBIAS1 capless mode, and relies on the
++# ADSP applying its ACDB calibration for this device (ACDBID 54) for the
++# rest. Mainline applies no ACDB calibration: at 0 dB a spoken capture on
++# boot 119 measured rms 85-165, peak 1519 or less, while +20 dB gave rms
++# 1757, peak 16614 and was judged good by ear. ADC3 Volume and capless mode
++# stay at the values of that capture until downstream's are measured here.
++SectionDevice."Mic1" {
++	Comment "Internal Microphone"
++
++	ConflictingDevice [
++		"Headset"
++	]
++
++	EnableSequence [
++		cset "name='DEC4 MUX' ADC3"
++		cset "name='I2S TX7 MUX' DEC4"
++		cset "name='I2S TX8 MUX' DEC4"
++		cset "name='ADC3 Volume' 0"
++		cset "name='MICBIAS1 CAPLESS Switch' off"
++		# +20 dB
++		cset "name='TX4 Digital Volume' 104"
++	]
++
++	DisableSequence [
++		cset "name='I2S TX7 MUX' ZERO"
++		cset "name='I2S TX8 MUX' ZERO"
++		cset "name='DEC4 MUX' ZERO"
++	]
++
++	Value {
++		CapturePriority 100
++		CapturePCM "hw:${CardId},1"
++	}
++}
++
++# Headset microphone: AMIC2 into ADC2 and DEC5, biased by MIC BIAS2
++# (msm8960-d2.c:448-449) and by the jack bias regulator, which the machine
++# driver switches on when it detects a 4-pole headset. Downstream Headset,
++# snd_soc_msm_2x:3555-3576 (DEC5 at 0 dB, ADC2 Volume 3, ACDBID 8). Not yet
++# tested with a headset inserted; the gain follows the tested main
++# microphone for the reason given there.
++SectionDevice."Headset" {
++	Comment "Headset Microphone"
++
++	ConflictingDevice [
++		"Mic1"
++	]
++
++	EnableSequence [
++		cset "name='DEC5 MUX' ADC2"
++		cset "name='I2S TX7 MUX' DEC5"
++		cset "name='I2S TX8 MUX' DEC5"
++		cset "name='ADC2 Volume' 0"
++		# +20 dB
++		cset "name='TX5 Digital Volume' 104"
++	]
++
++	DisableSequence [
++		cset "name='I2S TX7 MUX' ZERO"
++		cset "name='I2S TX8 MUX' ZERO"
++		cset "name='DEC5 MUX' ZERO"
++	]
++
++	Value {
++		CapturePCM "hw:${CardId},1"
++	}
++
++	# Same as for Headphones, bound to the "Headset Mic Jack" card control,
++	# which reads plugged for a 4-pole headset only. No JackHWMute here:
++	# nothing mutes the handset microphone when a headset is inserted, and
++	# the priority alone selects this device.
++	If.jack {
++		Condition {
++			Type ControlExists
++			Control "iface=CARD,name='Headset Mic Jack'"
++		}
++		True.Value {
++			CapturePriority 200
++			JackControl "Headset Mic Jack"
++		}
++		False.Value.CapturePriority 50
++	}
++}
+diff --git a/ucm2/Qualcomm/msm8960/samsung-expressatt/samsung-expressatt.conf b/ucm2/Qualcomm/msm8960/samsung-expressatt/samsung-expressatt.conf
+new file mode 100644
+index 0000000..a477e2c
+--- /dev/null
++++ b/ucm2/Qualcomm/msm8960/samsung-expressatt/samsung-expressatt.conf
+@@ -0,0 +1,14 @@
++Syntax 4
++
++# Samsung Galaxy Express SGH-I437 (samsung,expressatt): MSM8960 with a WCD9310
++# (Tabla 2.x) codec on the PRIMARY_I2S port behind the Q6 ADSP.
++#
++# The ALSA card has driver name "sm-expressatt" (card->driver_name in
++# sound/soc/qcom/msm8960-expressatt.c) and long name "samsung-expressatt" (DT
++# sound node model), so alsa-lib finds this file through
++# conf.d/sm-expressatt/samsung-expressatt.conf.
++
++SectionUseCase."HiFi" {
++	File "/Qualcomm/msm8960/samsung-expressatt/HiFi.conf"
++	Comment "Play and record HiFi quality music"
++}
+diff --git a/ucm2/conf.d/sm-expressatt/samsung-expressatt.conf b/ucm2/conf.d/sm-expressatt/samsung-expressatt.conf
+new file mode 120000
+index 0000000..6cd1299
+--- /dev/null
++++ b/ucm2/conf.d/sm-expressatt/samsung-expressatt.conf
+@@ -0,0 +1 @@
++../../Qualcomm/msm8960/samsung-expressatt/samsung-expressatt.conf
+\ No newline at end of file
+-- 
+2.39.5
+

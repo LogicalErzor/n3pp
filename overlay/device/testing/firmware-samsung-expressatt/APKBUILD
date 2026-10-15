@@ -1,0 +1,200 @@
+maintainer="Rudraksha Gupta <guptarud@gmail.com>"
+fork_reason="dummy"
+pkgname=firmware-samsung-expressatt
+pkgver=1
+pkgrel=2
+pkgdesc="Samsung Galaxy Express SGH-I437 Firmware"
+url="https://github.com/TheMuppets/proprietary_vendor_samsung"
+arch="armv7"
+license="proprietary"
+options="!check !strip !archcheck !spdx !tracedeps pmb:cross-native"
+
+# Source
+_commit="8070654db504a3fced627254be6bbd00c9e32e1a"
+_url="https://raw.githubusercontent.com/TheMuppets/proprietary_vendor_samsung/$_commit/expressatt/proprietary/etc/firmware"
+_files="
+	wcnss.b00
+	wcnss.b01
+	wcnss.b02
+	wcnss.b04
+	wcnss.b05
+	wcnss.mdt
+"
+for _i in $_files; do
+	source="$source $_i::$_url/$_i";
+done
+
+source="$source WCNSS_qcom_wlan_nv.bin::https://codeberg.org/LogicalErzor/WCNSS_Binary_Maker/raw/branch/main/bins/samsung-expressatt.bin"
+
+_qcom_files="
+	q6.mdt
+	q6.b00
+	q6.b01
+	q6.b03
+	q6.b04
+	q6.b05
+	q6.b06
+"
+
+_qcom_files="$_qcom_files
+	modem.mdt
+	modem.b00
+	modem.b01
+	modem.b02
+	modem.b03
+	modem.b04
+	modem.b05
+	modem.b06
+	modem.b07
+	modem.b08
+	modem.b09
+	modem_fw.mdt
+	modem_fw.b00
+	modem_fw.b01
+	modem_fw.b02
+	modem_fw.b03
+	modem_fw.b04
+	modem_fw.b05
+	modem_fw.b06
+	modem_fw.b07
+	modem_fw.b08
+	modem_fw.b09
+	modem_fw.b10
+	modem_fw.b11
+	modem_fw.b13
+	modem_fw.b14
+	modem_fw.b21
+	modem_fw.b22
+	modem_fw.b23
+	modem_fw.b25
+	modem_fw.b26
+	modem_fw.b29
+"
+
+for _i in $_qcom_files; do
+	source="$source $_i";
+done
+
+source="$source a2220.bin"
+
+package() {
+	for _i in $_files; do
+		install -Dm644 "$srcdir/$_i" "$pkgdir"/lib/firmware/"$_i"
+	done
+	
+	install -Dm644 "$srcdir/WCNSS_qcom_wlan_nv.bin" "$pkgdir"/lib/firmware/wlan/prima/WCNSS_qcom_wlan_nv.bin
+
+	for _i in $_qcom_files; do
+		install -Dm644 "$srcdir/$_i" "$pkgdir"/lib/firmware/qcom/msm8960/"$_i"
+	done
+
+	install -Dm644 "$srcdir/a2220.bin" "$pkgdir"/lib/firmware/audience/a2220.bin
+
+	# iw reg set US
+	# # List available networks (if scan works)
+	# nmcli device wifi list
+	# # Connect to a WPA/WPA2 network
+	# nmcli connection add type wifi con-name "MyWifi" ssid "YourSSID" wifi-sec.key-mgmt wpa-psk wifi-sec.psk "YourPassword"
+	# nmcli connection up "MyWifi"
+
+# # 1. Install packages (once)
+# doas apk add pipewire wireplumber pipewire-spa-bluez bluez
+
+# # 2. Create configs (once)
+# doas mkdir -p /etc/wireplumber/wireplumber.conf.d
+# doas mkdir -p /etc/pipewire/pipewire.conf.d
+
+# doas sh -c 'cat > /etc/wireplumber/wireplumber.conf.d/50-bluetooth.conf << "EOF"
+# monitor.bluez.properties = {
+#   bluez5.enable-sbc-xq = true
+#   bluez5.enable-msbc = true
+#   bluez5.enable-hw-volume = true
+# }
+# EOF'
+
+# doas sh -c 'cat > /etc/wireplumber/wireplumber.conf.d/51-force-bluez.conf << "EOF"
+# wireplumber.profiles = {
+#   main = {
+#     monitor.bluez = required
+#   }
+# }
+# EOF'
+
+# # 3. Create null sink so Bluetooth has somewhere to route audio (until real audio works)
+# doas sh -c 'cat > /etc/pipewire/pipewire.conf.d/99-null-sink.conf << "EOF"
+# context.objects = [
+#     { factory = adapter
+#         args = {
+#             factory.name     = support.null-audio-sink
+#             node.name        = "Null-Sink"
+#             media.class      = "Audio/Sink"
+#             audio.position   = [ FL FR ]
+#         }
+#     }
+# ]
+# EOF'
+
+# # 4. Start bluetooth service
+# doas rc-service bluetooth start
+
+# # 5. Start audio stack and connect
+# pkill -9 pipewire; pkill -9 wireplumber; rm -f /run/user/10000/pipewire-0.lock
+# dbus-run-session sh -c 'pipewire & sleep 2; wireplumber & sleep 5; wpctl status; exec sh'
+
+# bluetoothctl
+# > scan on
+# > pair <device_mac>
+# > trust <device_mac>
+# > connect <device_mac>
+# # download a youtube video and play it. audio will work!
+}
+
+sha512sums="
+0c4df79943a95c49fcb20612e4f2ed88575520ae4c4377b7fe8a3d28c91f4e42d1d6c3297b90156f6c109fceb7eac0fd0f613cc6122a129bf8129268fb0b0b29  wcnss.b00
+61b654008ff47fd273fc68dfffb019b779e6e0cdbc6784b047a7c6216bc800eef123d32c84a28e4b8fe712517c016f1e855e3cec1630e9110d64f46ec738222f  wcnss.b01
+112f044ce0ff79b97aa15e84907affe4133c0b6f72593c2710441dae5d828ee8a5392da409e4045a0be9834e394b9d06eb567d527703326f8f506c2b832d07ae  wcnss.b02
+5390be93024399544f11b8d7a09b197e06548141292e55976be28e6b3bb18169c767065ba901c6c854fbebf1936e791f566c96e0e92846dc490d339ed87c4c6e  wcnss.b04
+ae10da7a3fd0995c9e686178fb188104f48b867dd4444601e7ed494c723f5d7bb8be15b548f9be50da7bc946b719f4c57f3afe011fedeb09482c0da302e2e4d7  wcnss.b05
+a3089ec5dc7011542dae580454b4df44dd9a774efba9f1589c01cb5ad14b6e3f08570753fbef2a693f5a9f424657ea0f022d469fb2fffd5abc1a318b336ade2e  wcnss.mdt
+acc0cf4400655a83a955c1b1f9f034c1729a091ba4b55244e92e88cf2dd04cd5db07e5ca9aa1d363b4199b9dea3264ae2518a13e0184a0b21b9a306c97a3722e  WCNSS_qcom_wlan_nv.bin
+9d496728c8faab7e70d5381b9df24e05ad16d66d874dd39d70c077c508616ffb41a6e211846df1e6a605878fccfddb2850cc60e582d884245064550f73e6bba4  q6.mdt
+22b3b17db843e49cb59c4abdd55908582214c277596573019063320d58254aecece059373342fc5a882906737ecaad13245490b75a7c1506b3563b670fce500b  q6.b00
+9ee218636b0e4a72cda564c22cb3bc3e60fdc2836e014c1c39b31434e9757b582adadc46db0345632be6acaa5d728c0ef9d677ba4c2c907ff87eec2939e73e64  q6.b01
+5a1ee3d910d37a0596d721bb51f2911d165cd5ae8d87ad061d3b9785e54d26ea8ab9f4fdb01bf51620048013f248954fecb155fe298d590243f3b51676835061  q6.b03
+6d2630568c428f6cdd82176626ab415567faad067e82fb8e1d4aae5c0df4028640310f7fad66846067a5a4a9040d18463f012d2876eaa35a0fd59a09495453cf  q6.b04
+1a152bf2d695c9441de11f3fa62ed958486d97464f82c92431fde9f413aeaec3fe78d8fce7138e896790639150b571a0014f5c04a996d3004734c9480b3fd518  q6.b05
+51125c4a868b74004a8556e3d18d111bbeacbb87407166e145fdb116e96f1b2dc7f2fcd49d208e68b8a6e07704dd44dcf0120c98eed764708e1d1e0186708197  q6.b06
+8ea0a31517447a38649c5bae9aae5ef2767de88a68cdec1693b4a7929daa1bfcd06172bece6804041f7b15aea4bc8add591695a5633b9d6542f69fd45cced4e7  modem.mdt
+332f77067fcbbc744c69dec516fa7d7dcf3ed258c6a70e19c55013b0d15c28d580909c34733b734413aa7fba82b82f418554a64d4b845cb4509f46cb9ebc1489  modem.b00
+7a6ca1e862d837abfe3eba6fd83886136161b320fbbf93a7e4d5ea819137fb78c13ebd28ca4a3af9b71b4868d6ea7478cbe0294b40628dbbfa941d449f530ac4  modem.b01
+03698c47e8c35fd31dcaf5f47e66e6546648347f9b65a4b6ed42faa4bf4b5cd3088e20da7f7b93ade03f2eb73e4b94d8bafd4326a53a0011bde58594b839a7d1  modem.b02
+6d3c87c4cbcb847676ad1c43a0f7527a32a539d255f098f552b103b5fcb0befe91a1235724c3ff0edc2e60b3cb3ab0975de4359ff2c277ecd43c405f1370dbb8  modem.b03
+6c7a45b5410b06d71081c0d927e3109d7f0663d58e744da04c4e9c3dd7361e555f51c6214c25cd055eab0755e5b3f08be00680eed53d1410bf8253f220f0c922  modem.b04
+a2a5ddeccf6263751cc27befe07c40a67e8bc87512b252e5e14bd3bc5b8e890aacdf5881269a3bbf75e0ba65bd359f7ec631be858754a8cfbb6cba8e98cee10f  modem.b05
+b3e68d8b22ee9dfa144b6a7d1bd2d8374682e7140a70b766313405124fadbdc04397c956930a975f39309cee1978b0273d242f5a3300277ce34d033771fe7f29  modem.b06
+a6e9761aa5e0c710b447b508d508f7942ebca73cc2cea3640f60e71f5e3efef9447a43d06b6f3de816f8018f2e2ea994b1ce59796d6df7ac575fce3e894f8c5b  modem.b07
+de74a537a1874ab94c43b27290f0f4b584e3304d36a925760d57560b1c9db2aa489c3a21f3bb2d1b9d930fb5703bc3286f0c8173d3b8ba2eb0b7233cb1f8b281  modem.b08
+1acba0c86e29cb9817dec73f34bec2b2d3a7740e3127fd3c84a9d383bd7fd3f14e76b6932d07ef748a1e491d20162016b40c7e7d76d7bd0a9061a41916ffad09  modem.b09
+bc387f957a8404187057c44b05bf63c073b3358fdd4402e20cc25617862016325f2e72b3b1e79ee37e7a850cfd0b9112816bbc3d047335555768296c2fe7b4c2  modem_fw.mdt
+e2bfa3c79e19772d06337d1557f6878d84dc85c07f9012efcf481bd42c24d8c58d6c52e0ecbe6823b29f4e012b67f89c14397dec04316df83d9ed70503ec860a  modem_fw.b00
+61b9d52de48aba7dc47f02108ae2a8b51b8440885b1f2d015f6e0374efc8331829ea11fafd1e3c556f2050c8fe5780da5fe9986e962263b2bb431393965edf43  modem_fw.b01
+3c351c5639fd06cb100cd8c550896956b86255ccb72af51b9feb8b97898c3c2e8cd10a7a11597d7117a394b268ee94bf99bed5720e800ff2be7df6db2fa86901  modem_fw.b02
+66c26de0f9a695bf251fd982cbe113dd0f2851c34e023d1a39f8ef01161bda381b84a8fead040fabc25c99aba409f3283e120ae07cfbf219dbbd2a0c72bebc13  modem_fw.b03
+7ace9c4fd8be3db5f175bcd30334be977f987cfa96911d574a83b1f2f0f19d960b577dae234c1aa817e7c24890cce6d8875693d6ebfae6a39c5c0ecd5aa66370  modem_fw.b04
+0fff6d1718e7395dab4468340a9e34ea7f33e6137b6d5f32c397ed27d31026a813c5c8ea1bd4b342eba6b766c5063f45eaaa067ab95144cffd12c3322ccf5ba8  modem_fw.b05
+6e9120dca1ec8acadbccff6c99bf81ccb6e91b53019be1b5bda35fa5a5be8e18fd001fcda8f01096123d3aae1e71e0262910dad846f756c513493c92387232a2  modem_fw.b06
+4e8a5e650524ef9cbccd90fd0e9aec87cad3b0c547ae39793bac0d88a72adfc75d4591d61bfff04143a4a631193f424e977facc36f8bf1ae273430078d9a13c0  modem_fw.b07
+935d46ea3e0b62c7e69b879084f18a6ceffda7a748ba09b7e1644a99fbfbb6243f790dba946a746f8dc38272c5974b9a0e9cfd5640c889a9efe44408798451e6  modem_fw.b08
+95ffba21f7d2cf6a17d1aad31cf013a705441e31fc6bd57786948326e2a802b7a69c2a3a3245c7b503d44895dc11289604d9afe85a23d18726a0d0b4e5d4dceb  modem_fw.b09
+71371d47fc85fc79ee23518c367d60a033b28277ea788354524a78b3e103234594e9acf2fc119d75fd16795a8664f122f3ecd5e1718e56d5fee457d9ee1a8391  modem_fw.b10
+0941560b36d33e8cc1b48a70ba8b323a8924cbfd165200187ad0999705639ee62e137900ca8c8ae6e0d7bdddf1738fd9acd4056cda40741d24b304df81648b46  modem_fw.b11
+0078a4f752d394ed8c4878d912fabb73290e666587aac1c36d1a46d76da877aec4a842f5ae25be03bec75dcb22df8d601c499ae67fa0758d67498ed3a05e5a0f  modem_fw.b13
+ab32a86db66346d67dd3e5ebf2300a2dbaf76120358c6e0ee6dd86199c9a2ab9b9d6741558c2d4d94a0724e13341ce7378039eef17000ec02b2901d4e504a5e6  modem_fw.b14
+9ec676307c25cca517e1d7c87fee63a58afd780f9ead1c3da9d1e3cd0f5a2b902469f9151c9f153750ec3eef27d7476a1189674055fb39b1d3f02c2fef019296  modem_fw.b21
+5cae31c012ee298df0a6e7cfed131fa9d7026662f446f43b38811276b74557d5fe3e78e3732264f9a7dd66779f17be0c5d4e490bc85f5f58e8c9d2af3d8f6129  modem_fw.b22
+421116f4525dddae2f3eb37cccc2831c2f267220a569c5afe32795b29102d78e04cb08a7980283f036c21d40bdb94e54ec6172d7474c8de860887ca94275bbf0  modem_fw.b23
+a65345b309c95182094c629bb6c137b6e7c6fc7b9b9b0be9509cf6150487a57870af82f9e8c352a0614678a14712b3c5a55892833796779215436cf1954de209  modem_fw.b25
+0c68b46042da0907b8292605862739ca31707adf46bb05a5681ffa0dfdf8a8ba8607bd4c23fee216eb72ff7f7a2007288eecbf7f1993e9370a91102a1b66b508  modem_fw.b26
+036a3a16ec02ea4cc3e550821b5ccb46053a0dd1d303c15fb1c8ddd791836761bf921bb6f0b722d2c94d502f2cfce4d7d9e16de74f012315198f91a2d49f7b45  modem_fw.b29
+457935b06333c8efeadf89069d1260e40a51e014e258d23551aa0ea1300740d266689127e2a54945e3117f1a09b51d33ab2871637ff0fb14e53a7d4c935f69c6  a2220.bin
+"

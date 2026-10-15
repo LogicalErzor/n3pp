@@ -1,0 +1,10 @@
+maintainer="Rudraksha Gupta <guptarud@gmail.com>"
+fork_reason="dummy"
+# the APKBUILD bumps pkgver after sourcing this; keep abuild's default builddir on the real one
+builddir="${builddir:-$srcdir/$pkgname-$pkgver}"
+source="$source
+	n3pp/0002-udev-manager-find-the-graphical-logind-session.patch
+	"
+sha512sums="$sha512sums
+fcc5d7966e24f51feb2615e17e91312376bf0067959b984db115d5c261b74843fdbf73a0e386f579651347fe0c8aa5ce4329375c526241adc85a9cef0a1f413b  0002-udev-manager-find-the-graphical-logind-session.patch
+"

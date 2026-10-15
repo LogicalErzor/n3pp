@@ -1,0 +1,45 @@
+From 26a5a39e7b28ad466357311a992e5f1df3572661 Mon Sep 17 00:00:00 2001
+From: Rudraksha Gupta <guptarud@gmail.com>
+Date: Wed, 7 Oct 2026 11:00:00 +0000
+Subject: [PATCH] qcom-soc: Also match modems driven by qcom-q6v4-mss
+
+The qcom-soc udev rules only process wwan and rpmsg ports below a
+remoteproc driven by qcom-q6v5-mss. The modem of the MSM8960 is a Q6v4
+and is driven by qcom-q6v4-mss, so its control ports (wwan0qmi0,
+wwan0at0, wwan0at1 on the SMD edge) get no ID_MM_PHYSDEV_UID and are
+never grouped with the bam-dmux network ports:
+
+  Failed to find a net port in the QMI modem
+
+Match qcom-q6v4-mss as well. Tested on a Samsung Galaxy Express
+(SGH-I437): the modem is detected and a 3GPP scan finds networks.
+---
+ src/plugins/qcom-soc/77-mm-qcom-soc.rules | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/src/plugins/qcom-soc/77-mm-qcom-soc.rules b/src/plugins/qcom-soc/77-mm-qcom-soc.rules
+index 9719f96..0b1ad0d 100644
+--- a/src/plugins/qcom-soc/77-mm-qcom-soc.rules
++++ b/src/plugins/qcom-soc/77-mm-qcom-soc.rules
+@@ -7,6 +7,8 @@ SUBSYSTEM=="net",   DRIVERS=="bam-dmux",      GOTO="mm_qcom_soc_process"
+ SUBSYSTEM=="net",   DRIVERS=="ipa",           GOTO="mm_qcom_soc_process"
+ SUBSYSTEM=="wwan",  DRIVERS=="qcom-q6v5-mss", GOTO="mm_qcom_soc_process"
+ SUBSYSTEM=="rpmsg", DRIVERS=="qcom-q6v5-mss", GOTO="mm_qcom_soc_process"
++SUBSYSTEM=="wwan",  DRIVERS=="qcom-q6v4-mss", GOTO="mm_qcom_soc_process"
++SUBSYSTEM=="rpmsg", DRIVERS=="qcom-q6v4-mss", GOTO="mm_qcom_soc_process"
+ GOTO="mm_qcom_soc_end"
+ 
+ LABEL="mm_qcom_soc_process"
+@@ -19,7 +21,8 @@ ENV{ID_MM_QCOM_SOC}="1"
+ # are all bound together to the same modem object.
+ #
+ # The MSM8916, MSM8974, .... Qualcomm SoCs use the combination of RPMSG/WWAN
+-# based control ports plus BAM-DMUX based network ports.
++# based control ports plus BAM-DMUX based network ports. The modem of the
++# MSM8960 is a Q6v4 and is driven by qcom-q6v4-mss instead of qcom-q6v5-mss.
+ #
+ ENV{ID_MM_PHYSDEV_UID}="qcom-soc"
+ 
+-- 
+2.39.5
+

@@ -1,0 +1,10 @@
+maintainer="Rudraksha Gupta <guptarud@gmail.com>"
+fork_reason="dummy"
+# the APKBUILD bumps pkgver after sourcing this; keep abuild's default builddir on the real one
+builddir="${builddir:-$srcdir/$pkgname-$pkgver}"
+source="$source
+	n3pp/0001-rmtfs-Start-rmtfs.service-when-the-modem-remoteproc-appears.patch
+	"
+sha512sums="$sha512sums
+087e58ed758abcc7c58e1728a84dbae46bb2fb0c7e31eb190ebabdcf05ecda070be72dd5510a18066b27f8eb6e01c1dbbe38ede7494d5bdd43c2e7d2023dba32  0001-rmtfs-Start-rmtfs.service-when-the-modem-remoteproc-appears.patch
+"

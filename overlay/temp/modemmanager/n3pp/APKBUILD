@@ -1,0 +1,15 @@
+maintainer="Rudraksha Gupta <guptarud@gmail.com>"
+fork_reason="dummy"
+# the APKBUILD bumps pkgver after sourcing this; keep abuild's default builddir on the real one
+builddir="${builddir:-$srcdir/$pkgname-$pkgver}"
+options="$options !check"
+makedepends="${makedepends/$depends_dev/}"
+# unversioned, so apk picks our libmm-glib (highest version) instead of upstream's exact pin
+depends="${depends/$depends_dev/libmm-glib}"
+depends_dev="libmm-glib"
+source="$source
+	n3pp/0002-qcom-soc-also-match-modems-driven-by-qcom-q6v4-mss.patch
+	"
+sha512sums="$sha512sums
+29c15a905ded1df77f57e6de3c5d9e85c782944478a3ad8ce13149223d607a8f547230ca58b85b3f8aa804591e82f8e5cee3bf70ca6784fcb1cc56fe415cf127  0002-qcom-soc-also-match-modems-driven-by-qcom-q6v4-mss.patch
+"
